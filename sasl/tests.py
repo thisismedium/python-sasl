@@ -1,26 +1,185 @@
+"""tests -- unit tests
+
+Copyright (c) 2009, Coptix, Inc.  All rights reserved.
+See the LICENSE file for license terms and warranty disclaimer.
+"""
+
 from __future__ import absolute_import
 import unittest
 from md import fluid
 from . import *
 
+## Fluid parameters representing configuration values or request
+## parameters.
 USER = fluid.cell()
 PASS = fluid.cell()
+SERV = fluid.cell('test-service')
+HOST = fluid.cell('example.net')
 
-class TestPlain(unittest.TestCase):
+## User database and authentication.
+USERS = { 'foo@bar.com': 'baz' }
+
+AUTH = SimpleAuth(
+    DigestMD5Password, USERS, USER.get, PASS.get, SERV.get, HOST.get
+)
+
+class TestRFC(unittest.TestCase):
+    """Test the RFC parser."""
 
     def setUp(self):
-        users = { 'foo@bar.com': 'baz' }
-        self.auth = SimpleAuth(users, lambda: USER.value, lambda: PASS.value)
-        self.mech = plain.Plain(self.auth)
+        from . import rfc
+
+        self.headers = rfc.items(min=1, rules={
+            'maxbuf': 'integer',
+            'qop': rfc.quoted()
+        })
+
+    def test_write(self):
+        data = self.headers.write(sorted({
+            'foo': 'bar',
+            'baz': 'mumble "quux" frob!',
+            'qop': ['auth', 'auth-conf'],
+            'maxbuf': 1024
+        }.items()))
+
+        self.assertEqual(
+            data,
+            u'baz="mumble \\"quux\\" frob!",foo=bar,maxbuf=1024,qop="auth,auth-conf"'
+        )
+
+    def test_read(self):
+        data = u'baz="mumble \\"quux\\" frob!",foo=bar,maxbuf=1024,qop="auth,auth-conf"'
+        (value, _) = self.headers.read(data)
+        self.assertEqual(value, [
+            (u'baz', u'mumble "quux" frob!'),
+            (u'foo', u'bar'),
+            (u'maxbuf', 1024),
+            (u'qop', [u'auth', u'auth-conf'])
+        ])
+
+    def test_read_null(self):
+        (value, _) = self.headers.read(u'a=b , , c=d')
+        self.assertEqual(value, [('a', 'b'), ('c', 'd')])
+
+    def test_read_incomplete(self):
+        from . import rfc
+
+        self.assertRaises(
+            rfc.ReadError,
+            lambda: self.headers.read(u'maxbuf=')
+        )
+
+class TestMech(object):
+    """A suite of tests that can be run against any Mechanism.
+    Subclass this mixin and declare MECH to be a Mechanism."""
+
+    MECH = None
+
+    def setUp(self):
+        self.mech = self.MECH(AUTH)
 
     def test_success(self):
-        ch = self.mech.challenge()
-        with fluid.let((USER, 'foo@bar.com'), (PASS, 'baz')):
-            re = self.mech.respond(ch)
-        self.assert_(self.mech.verify_challenge(re))
+        (sk, ck) = self.negotiate('foo@bar.com', 'baz')
+        self.assert_(self.coalesce(sk, ck))
+        self.assert_(self.coalesce(ck, sk))
 
     def test_failure(self):
-        ch = self.mech.challenge()
-        with fluid.let((USER, 'foo@bar.com'), (PASS, '')):
-            re = self.mech.respond(ch)
-        self.assertFalse(self.mech.verify_challenge(re))
+        (sk, ck) = self.negotiate('foo@bar.com', 'mumble')
+        self.assertFalse(self.coalesce(sk, ck))
+
+    def coalesce(self, value, default):
+        """A value of None indicates the decision about whether
+        authentication succeeded is left up to the other end of the
+        exchange."""
+
+        return default if value is None else value
+
+    def negotiate(self, user, passwd):
+        """Normally this negotiation would take place over a network.
+        The `sdata' and `cdata' variables are the data that could be
+        sent from the server and from the client.  The `sk' and `ck'
+        variables represent the "continuation" of the server and
+        client.
+
+        A continuation is a procedure if the exchange should continue,
+        False if authentication failed, or True if authentication
+        succeeded, or None if the decision is left up to the other end
+        of the exchange."""
+
+        ## Server issues a challenge.
+        (sk, sdata) = self.mech.challenge()
+
+        ## Client responds.
+        with fluid.let((USER, user), (PASS, passwd)):
+            (ck, cdata) = self.mech.respond(sdata)
+
+        ## Server and client continue the exchange until they're
+        ## satisfied.
+        while callable(sk) or callable(ck):
+            if callable(sk):
+                self.assert_(cdata is not None)
+                (sk, sdata) = sk(cdata)
+            else:
+                sdata = None
+
+            if callable(ck):
+                self.assert_(sdata is not None)
+                (ck, cdata) = ck(sdata)
+            else:
+                cdata = None
+
+        return (sk, ck)
+
+class TestPlain(TestMech, unittest.TestCase):
+    MECH = Plain
+
+class TestDigestMD5(TestMech, unittest.TestCase):
+    MECH = DigestMD5
+
+    def test_challenge(self):
+        """Test basic expectations about a challenge."""
+
+        (_, data) = self.mech.challenge()
+        challenge = dict(rfc.data(self.mech.CHALLENGE, data))
+
+        ## Nonce is random, so it can't be compared for equality.
+        self.assert_(challenge.pop('nonce'))
+
+        self.assertEqual(sorted(challenge.items()), [
+            ('algorithm', 'md5-sess'),
+            ('charset', 'utf-8'),
+            ('realm', 'test-service@example.net')
+        ])
+
+    def test_response(self):
+        """Test basic expectations about a response."""
+
+        (_, data) = self.mech.challenge()
+        with fluid.let((USER, 'user@example.net'), (PASS, 'secret')):
+            (_, data) = self.mech.respond(data)
+            resp = dict(rfc.data(self.mech.RESPOND, data))
+
+        self.assertNotEqual(resp['nonce'], resp['cnonce'])
+
+        ## These are random, so pop them off before equality
+        ## comparison.
+        self.assert_(resp.pop('nonce'))
+        self.assert_(resp.pop('cnonce'))
+        self.assert_(resp.pop('response'))
+
+        self.assertEqual(sorted(resp.items()), [
+            (u'charset', u'utf-8'),
+            (u'digest-uri', u'test-service/example.net'),
+            (u'nc', 1),
+            (u'realm', u'test-service@example.net'),
+            (u'username', u'user@example.net')
+        ])
+
+    def test_nonce(self):
+        """Test that the nonce is random."""
+
+        self.assertNotEqual(
+            self.mech.make_nonce(),
+            self.mech.make_nonce()
+        )
+

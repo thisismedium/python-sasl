@@ -1,1 +1,5 @@
 *.py?
+build
+README.html
+dist
+*.egg-info

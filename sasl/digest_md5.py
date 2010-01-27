@@ -14,6 +14,8 @@ __all__ = ('DigestMD5', 'DigestMD5Password')
 
 class DigestMD5(mech.Mechanism):
 
+    SECURE = True
+
     def __init__(self, auth):
         self.auth = auth
 
@@ -74,7 +76,7 @@ class DigestMD5(mech.Mechanism):
     def receive_ack(self, data):
         ## The client has acknowledges the rspauth sent;
         ## authentication was successful.
-        return (True, None)
+        return (True, '')
 
     ## Client
     ## 1. Respond to server challenge.
@@ -122,7 +124,11 @@ class DigestMD5(mech.Mechanism):
         ## If the rspauth matches the expected value, authentication
         ## was successful.  The server expects an empty reply that
         ## confirms acknowledgement.
-        return (verify.get('rspauth') == expect, '')
+        return (verify.get('rspauth') == expect and self.ack_accepted, '')
+
+    def ack_accepted(self, data):
+        assert data == ''
+        return (True, None)
 
     ## Grammars
 

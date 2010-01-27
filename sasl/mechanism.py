@@ -10,9 +10,6 @@ be registered by converting its name into a canonical form.
 
 <http://tools.ietf.org/html/rfc2222>
 <http://www.iana.org/assignments/sasl-mechanisms>
-
-Copyright (c) 2009, Coptix, Inc.  All rights reserved.
-See the LICENSE file for license terms and warranty disclaimer.
 """
 from __future__ import absolute_import
 import abc, re
@@ -51,6 +48,8 @@ class Mechanism(object):
 
     __metaclass__ = MechanismType
     __slots__ = ()
+
+    SECURE = False
 
     @abc.abstractmethod
     def challenge(self):

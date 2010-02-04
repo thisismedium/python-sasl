@@ -19,6 +19,8 @@ class DigestMD5(mech.Mechanism):
     def __init__(self, auth):
         self.auth = auth
 
+    state = mech.AuthState
+
     ## Server
     ## 1. Issue challenge.
     ## 2. Verify challenge response is correct; reply with rspauth.
@@ -27,56 +29,56 @@ class DigestMD5(mech.Mechanism):
     def challenge(self):
         ## Issue a challenge; continue by verifying the client's
         ## response.
-        return (self.verify_challenge, self.write(self.CHALLENGE, {
+        return self.state(self.verify, None, self.write(self.CHALLENGE, {
             'realm': self.auth.realm(),
             'nonce': self.make_nonce(),
             'charset': 'utf-8',
             'algorithm': 'md5-sess'
         }))
 
-    def verify_challenge(self, data):
+    def verify(self, entity, data):
         try:
             response = dict(rfc.data(self.RESPOND, data))
         except rfc.ReadError as exc:
-            return (False, None)
+            return self.state(False, entity, None)
 
         ## If the nonce count is not one, the client is trying to use
         ## "subsequent authentication", but this is usupported.
         if response.get('nc') != 1:
-            return (False, '')
+            return self.state(False, entity, '')
 
         ## Confirm the digest-uri.
         if response.get('digest-uri') != self.make_digest_uri():
-            return (False, '')
+            return self.state(False, entity, '')
 
         ## Make sure the username exists, get the stored password.
-        username = response.get('username')
-        passwd = username and self.auth.get_password(username)
+        entity = response.get('username')
+        passwd = entity and self.auth.get_password(entity)
         if not passwd:
-            return (False, '')
+            return self.state(False, entity, '')
 
         ## The password must be stored in a format compatible with
         ## DigestMD5Password.  Convert it to a binary representation
         ## and generate the response hashes.
         try:
-            uh = DigestMD5Password.digest(self.auth, username, passwd)
+            uh = DigestMD5Password.digest(self.auth, entity, passwd)
             (expect, rspauth) = self.make_response(response, uh)
         except auth.PasswordError as exc:
-            return (False, '')
+            return self.state(False, entity, '')
 
         ## Verify that the response hashes match.
         if expect != response.get('response'):
-            return (False, '')
+            return self.state(False, entity, '')
 
         ## Return the rspauth hash; wait for acknowledgement.
-        return (self.receive_ack, self.write(self.VERIFY, {
+        return self.state(self.finish, entity, self.write(self.VERIFY, {
             'rspauth': rspauth
         }))
 
-    def receive_ack(self, data):
+    def finish(self, entity, data):
         ## The client has acknowledges the rspauth sent;
         ## authentication was successful.
-        return (True, '')
+        return self.state(True, entity, '')
 
     ## Client
     ## 1. Respond to server challenge.
@@ -87,15 +89,16 @@ class DigestMD5(mech.Mechanism):
         try:
             challenge = dict(rfc.data(self.CHALLENGE, data))
         except rfc.ReadError:
-            return (False, None)
+            return self.state(False, None, None)
 
         enc = self.encoding(challenge)
         zid = self.auth.authorization_id()
+        cid = unicode(self.auth.username()).encode(enc)
 
         ## Derive response parameters from the challenge and from the
         ## client environment.
         params = {
-            'username': unicode(self.auth.username()).encode(enc),
+            'username': cid,
             'realm': challenge.get('realm', u''),
             'nonce': challenge['nonce'],
             'cnonce': self.make_nonce(),
@@ -112,23 +115,25 @@ class DigestMD5(mech.Mechanism):
 
         ## Generate the response; continue by acknowledging the
         ## server's response.
-        ack = lambda d: self.acknowledge(expect, d)
-        return (ack, self.write(self.RESPOND, params))
+        ack = lambda *a: self.acknowledge(expect, *a)
+        return self.state(ack, zid or cid, self.write(self.RESPOND, params))
 
-    def acknowledge(self, expect, data):
+    def acknowledge(self, expect, entity, data):
         try:
             verify = dict(rfc.data(self.VERIFY, data))
         except rfc.ReadError:
-            return (False, None)
+            return self.state(False, entity, None)
 
         ## If the rspauth matches the expected value, authentication
         ## was successful.  The server expects an empty reply that
         ## confirms acknowledgement.
-        return (verify.get('rspauth') == expect and self.ack_accepted, '')
+        if verify.get('rspauth') == expect:
+            return self.state(self.accepted, entity, '')
+        return self.state(False, entity, None)
 
-    def ack_accepted(self, data):
+    def accepted(self, entity, data):
         assert data == ''
-        return (True, None)
+        return self.state(True, entity, None)
 
     ## Grammars
 
@@ -181,7 +186,7 @@ class DigestMD5(mech.Mechanism):
         service = auth.service_name()
         return '%s/%s%s' % (
             auth.service_type(),
-            auth.host(),
+            auth.realm(),
             ('/%s' % service if service else u'')
         )
 
@@ -247,7 +252,7 @@ def user_hash(user, realm, passwd, encoding='utf-8'):
         realm = iso_8859_1(realm)
         passwd = iso_8859_1(passwd)
 
-    return colons(md5, user, passwd, realm)
+    return colons(md5, user, realm, passwd)
 
 def a1_hash(uh, nonce, cnonce, authzid):
     """A1 hash (see RFC-2831 page 10).  The uh parameter is the result

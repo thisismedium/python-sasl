@@ -15,26 +15,32 @@ class Plain(mech.Mechanism):
     id, the authentication id, and password separated by null
     bytes."""
 
-    NULL = u'0x00'
+    NULL = u'\x00'
 
     def __init__(self, auth):
         self.auth = auth
 
+    def verify(self, *args):
+        return self.auth.verify_password(*args)
+
+    state = mech.AuthState
+
     ## Server
 
     def challenge(self):
-        return (self.verify_challenge, '')
+        return self.state(self.verify_challenge, None, '')
 
-    def verify_challenge(self, response):
+    def verify_challenge(self, entity, response):
         try:
             (zid, cid, passwd) = response.decode('utf-8').split(self.NULL)
-        except ValueError:
-            return (False, None)
+        except ValueError as exc:
+            return self.state(False, entity, None)
 
         try:
-            return (self.auth.verify_password(zid, cid, passwd), None)
-        except auth.PasswordError:
-            return (False, None)
+            entity = entity or zid or cid
+            return self.state(self.verify(zid, cid, passwd), entity, None)
+        except auth.PasswordError as exc:
+            return self.state(False, entity, None)
 
     ## Client
 
@@ -51,7 +57,8 @@ class Plain(mech.Mechanism):
             (auth.password() or u'')
         )).encode('utf-8')
 
-        return (None, response)
+        self.authorized = zid or cid
+        return self.state(None, zid or cid, response)
 
 class PlainPassword(auth.PasswordType):
 

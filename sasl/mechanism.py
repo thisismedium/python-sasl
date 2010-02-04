@@ -12,7 +12,7 @@ be registered by converting its name into a canonical form.
 <http://www.iana.org/assignments/sasl-mechanisms>
 """
 from __future__ import absolute_import
-import abc, re
+import abc, re, collections
 
 __all__ = ('define', 'Mechanism')
 
@@ -32,14 +32,13 @@ class MechanismType(abc.ABCMeta):
 
 class Mechanism(object):
     """The SASL mechanism interface.  The only two methods required
-    are challenge() and respond().  These methods return
-    <continuation, data> items.  The continuation is one of the
-    following:
+    are challenge() and respond().  These methods return AuthState
+    items.  The continuation field (k) is one of the following:
 
       callback   call this with data received from the other end
       True       authentication succeeded
       False      authentication failed
-      None       success/failure is up to the other end
+      None       need confirmation of success from other end
 
     A Mechanism can implement any number of steps in an authentication
     sequence by returning callback procedures as the continuation.
@@ -58,6 +57,20 @@ class Mechanism(object):
     @abc.abstractmethod
     def respond(self, challenge):
         """Respond to a challenge."""
+
+class AuthState(collections.namedtuple('AuthState', 'k entity data')):
+
+    def __call__(self, response):
+        return self.k and self.k(self.entity, response)
+
+    def success(self):
+        return self.k is True
+
+    def failure(self):
+        return self.k is False
+
+    def confirm(self):
+        return self.k is None
 
 
 ### Registry

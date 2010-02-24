@@ -216,9 +216,14 @@ class item(Parameterized):
     ((u'foo', u'baz@mumble.net'), 20)
     """
 
+    QUOTES = True
+
     def __init__(self, default='token_or_quoted_string', rules={}):
         self.default = default and production(default)
-        self.grammar = dict((k, production(v)) for (k, v) in rules.iteritems())
+        self.grammar = dict(
+            (k, maybe_unquote(production(v)))
+            for (k, v) in rules.iteritems()
+        )
 
     def production(self, name):
         """Find the production for a value based on an item's name.
@@ -246,6 +251,7 @@ class item(Parameterized):
         ))
 
 class quote(Parameterized):
+    QUOTES = True
 
     def __init__(self, kind=None):
         self.kind = production(kind) if kind else element_list(token, min=1)
@@ -263,6 +269,39 @@ class quote(Parameterized):
         dq = double_quote.write(None)
         return u'%s%s%s' % (dq, self.kind.write(data), dq)
 
+class MaybeUnquote(Parameterized):
+    def __init__(self, kind):
+        self.kind = kind
+        self.write = kind.write
+
+    def read(self, data, pos=0):
+        if data[pos] != '"':
+            return self.kind.read(data, pos)
+        try:
+            (quoted, new_pos) = require(quoted_string, data, pos)
+            (value, val_pos) = require(self.kind, quoted, 0)
+            if val_pos == len(quoted):
+                return (value, new_pos)
+            return (None, pos)
+        except BadToken:
+            return (None, pos)
+
+    def write(self, data):
+        return self.kind.write(data)
+
+def maybe_unquote(prod):
+    """
+    >>> int = maybe_unquote(integer)
+    >>> int.read('123')
+    (123, 3)
+    >>> int.read("123")
+    (123, 3)
+    >>> int.read("foo")
+    (None, 0)
+    """
+    prod = production(prod)
+    return prod if getattr(prod, 'QUOTES', False) else MaybeUnquote(prod)
+
 
 ### Simple Productions
 
@@ -279,6 +318,7 @@ class token_or_quoted_string(Production):
     u'"frob@mumble.net"'
     """
 
+    QUOTES = True
     SEPARATOR = re.compile(r'[\(\)<>@,;:\\"/\[\]\?={}\s]')
 
     @classmethod
@@ -305,6 +345,7 @@ class quoted_string(Production):
     (None, 0)
     """
 
+    QUOTES = True
     UNESCAPE = re.compile(r'\\(.)')
 
     @regular(r'"((?:\\.|[^"])+)"')

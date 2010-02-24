@@ -8,6 +8,7 @@ See the LICENSE file for license terms and warranty disclaimer.
 
 from __future__ import absolute_import
 import re, functools, random, struct, base64, hashlib, binascii
+import logging as log
 from . import mechanism as mech, rfc, auth
 
 __all__ = ('DigestMD5', 'DigestMD5Password')
@@ -40,21 +41,29 @@ class DigestMD5(mech.Mechanism):
         try:
             response = dict(rfc.data(self.RESPOND, data))
         except rfc.ReadError as exc:
+            log.error('ReadError: %r', exc)
             return self.state(False, entity, None)
 
         ## If the nonce count is not one, the client is trying to use
         ## "subsequent authentication", but this is usupported.
         if response.get('nc') != 1:
+            log.error('nc = %r; expected 1', response.get('nc'))
             return self.state(False, entity, '')
 
         ## Confirm the digest-uri.
-        if response.get('digest-uri') != self.make_digest_uri():
+        if not self.verify_digest_uri(response.get('digest-uri')):
+            log.error(
+                'digest-uri = %r; expected %r',
+                response.get('digest-uri'),
+                self.make_digest_uri()
+            )
             return self.state(False, entity, '')
 
         ## Make sure the username exists, get the stored password.
         entity = response.get('username')
         passwd = entity and self.auth.get_password(entity)
         if not passwd:
+            log.error('Missing entity (%r) or password (%r)', entity, passwd)
             return self.state(False, entity, '')
 
         ## The password must be stored in a format compatible with
@@ -64,10 +73,16 @@ class DigestMD5(mech.Mechanism):
             uh = DigestMD5Password.digest(self.auth, entity, passwd)
             (expect, rspauth) = self.make_response(response, uh)
         except auth.PasswordError as exc:
+            log.error('PasswordError: %r' % exc)
             return self.state(False, entity, '')
 
         ## Verify that the response hashes match.
         if expect != response.get('response'):
+            log.error(
+                'expected response=%r, got %r',
+                expect,
+                response.get('response')
+            )
             return self.state(False, entity, '')
 
         ## Return the rspauth hash; wait for acknowledgement.
@@ -129,6 +144,7 @@ class DigestMD5(mech.Mechanism):
         ## confirms acknowledgement.
         if verify.get('rspauth') == expect:
             return self.state(self.accepted, entity, '')
+        log.error('expected rspauth=%r, got %r', expect, verify.get('rspauth'))
         return self.state(False, entity, None)
 
     def accepted(self, entity, data):
@@ -186,8 +202,23 @@ class DigestMD5(mech.Mechanism):
         service = auth.service_name()
         return '%s/%s%s' % (
             auth.service_type(),
-            auth.realm(),
+            auth.host(),
             ('/%s' % service if service else u'')
+        )
+
+    DIGEST_URI = re.compile('^([^/]+)/([^/]+)(?:/(.+))?$')
+
+    def verify_digest_uri(self, uri):
+        probe = uri and self.DIGEST_URI.match(uri)
+        if not probe:
+            return False
+        auth = self.auth
+        service = auth.service_name()
+        (A, B, C) = probe.groups()
+        return (
+            A == auth.service_type()
+            and (B == auth.host() or B == auth.realm())
+            and (not service or C == service)
         )
 
     def make_response(self, data, uh=None, kinds=('AUTHENTICATE', '')):

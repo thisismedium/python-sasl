@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'python-sasl',
-    version = '0.1',
+    version = '0.1.1',
     description = 'A SASL implementation.',
     author = 'Medium',
     author_email = 'labs@thisismedium.com',

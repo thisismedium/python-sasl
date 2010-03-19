@@ -88,9 +88,11 @@ class SimpleAuth(Authenticator):
         self._user = user
         self._passwd = passwd
         self._authzid = authzid
-        self._realm = realm
         self._serv_type = serv_type
         self._host = host
+
+        if realm:
+            self.realm = realm
 
         ## Install
         self._entities = dict(

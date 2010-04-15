@@ -76,7 +76,9 @@ class TestMech(object):
     MECH = None
 
     def setUp(self):
+        import logging
         self.mech = self.MECH(AUTH)
+        log.setLevel(logging.CRITICAL)
 
     def test_success(self):
         (sk, ck) = self.negotiate('foo@bar.com', 'baz')
@@ -88,11 +90,7 @@ class TestMech(object):
         self.assertFalse(self.coalesce(sk, ck))
 
     def coalesce(self, value, default):
-        """A value of None indicates the decision about whether
-        authentication succeeded is left up to the other end of the
-        exchange."""
-
-        return default if value is None else value
+        return default.success() if value.confirm() else value.success()
 
     def negotiate(self, user, passwd):
         """Normally this negotiation would take place over a network.
@@ -107,26 +105,18 @@ class TestMech(object):
         of the exchange."""
 
         ## Server issues a challenge.
-        (sk, sdata) = self.mech.challenge()
+        sk = self.mech.challenge()
 
         ## Client responds.
         with fluid.let((USER, user), (PASS, passwd)):
-            (ck, cdata) = self.mech.respond(sdata)
+            ck = self.mech.respond(sk.data)
 
-        ## Server and client continue the exchange until they're
-        ## satisfied.
-        while callable(sk) or callable(ck):
-            if callable(sk):
-                self.assert_(cdata is not None)
-                (sk, sdata) = sk(cdata)
-            else:
-                sdata = None
+        while not (sk.finished() and ck.finished()):
+            if not sk.finished():
+                sk = sk(ck.data)
 
-            if callable(ck):
-                self.assert_(sdata is not None)
-                (ck, cdata) = ck(sdata)
-            else:
-                cdata = None
+            if not ck.finished():
+                ck = ck(sk.data)
 
         return (sk, ck)
 
@@ -139,8 +129,8 @@ class TestDigestMD5(TestMech, unittest.TestCase):
     def test_challenge(self):
         """Test basic expectations about a challenge."""
 
-        (_, data) = self.mech.challenge()
-        challenge = dict(rfc.data(self.mech.CHALLENGE, data))
+        state = self.mech.challenge()
+        challenge = dict(rfc.data(self.mech.CHALLENGE, state.data))
 
         ## Nonce is random, so it can't be compared for equality.
         self.assert_(challenge.pop('nonce'))
@@ -154,10 +144,10 @@ class TestDigestMD5(TestMech, unittest.TestCase):
     def test_response(self):
         """Test basic expectations about a response."""
 
-        (_, data) = self.mech.challenge()
+        state = self.mech.challenge()
         with fluid.let((USER, 'user@example.net'), (PASS, 'secret')):
-            (_, data) = self.mech.respond(data)
-            resp = dict(rfc.data(self.mech.RESPOND, data))
+            rstate = self.mech.respond(state.data)
+            resp = dict(rfc.data(self.mech.RESPOND, rstate.data))
 
         self.assertNotEqual(resp['nonce'], resp['cnonce'])
 

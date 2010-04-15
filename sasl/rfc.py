@@ -275,8 +275,12 @@ class MaybeUnquote(Parameterized):
         self.write = kind.write
 
     def read(self, data, pos=0):
-        if data[pos] != '"':
-            return self.kind.read(data, pos)
+        try:
+            if data[pos] != '"':
+                return self.kind.read(data, pos)
+        except IndexError:
+            raise BadToken(self, data, pos)
+
         try:
             (quoted, new_pos) = require(quoted_string, data, pos)
             (value, val_pos) = require(self.kind, quoted, 0)

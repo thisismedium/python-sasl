@@ -72,6 +72,9 @@ class AuthState(collections.namedtuple('AuthState', 'k entity data')):
     def confirm(self):
         return self.k is None
 
+    def finished(self):
+        return not(callable(self.k))
+
 
 ### Registry
 

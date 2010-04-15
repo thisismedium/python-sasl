@@ -8,8 +8,7 @@ See the LICENSE file for license terms and warranty disclaimer.
 
 from __future__ import absolute_import
 import re, functools, random, struct, base64, hashlib, binascii
-import logging as log
-from . import mechanism as mech, rfc, auth
+from . import mechanism as mech, rfc, auth, log
 
 __all__ = ('DigestMD5', 'DigestMD5Password')
 
